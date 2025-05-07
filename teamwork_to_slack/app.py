@@ -1,11 +1,11 @@
 ﻿# teamwork_to_slack/app.py
+
 from flask import Flask, request, jsonify
 import requests
 import os
 from dotenv import load_dotenv
 from datetime import datetime
 
-# Load environment variables from .env file
 load_dotenv()
 
 app = Flask(__name__)
@@ -18,7 +18,6 @@ latest_channel_id = DEFAULT_SLACK_CHANNEL
 if not SLACK_BOT_TOKEN:
     raise RuntimeError("SLACK_BOT_TOKEN is not set. Please define it in a .env file or environment variable.")
 
-# Fetch the bot's ID dynamically using auth.test
 BOT_ID = None
 KNOWN_BOT_IDS = set()
 
@@ -31,7 +30,7 @@ def fetch_bot_id():
         result = resp.json()
         BOT_ID = result.get("bot_id")
         if BOT_ID:
-            KNOWN_BOT_IDS = {BOT_ID, "B08QQESME15"}  # add known historical webhook bot id
+            KNOWN_BOT_IDS = {BOT_ID, "B08QQESME15"}
             print(f"✅ Slack Bot ID resolved to: {BOT_ID}")
     except Exception as e:
         print("Failed to fetch bot ID:", e)
@@ -85,11 +84,30 @@ def teamwork_webhook():
     if isinstance(status, dict):
         status = status.get("name")
 
-    assignee = ticket.get("assignee") or ticket.get("assigned_to")
-    assigned_to = assignee.get("fullName") if isinstance(assignee, dict) else "Unassigned"
+    # Fix: Support "agent" field from Teamwork as assignee
+    assignee = (
+        ticket.get("agent") or
+        ticket.get("assignee") or
+        ticket.get("assigned_to") or
+        ticket.get("assigneeId") or
+        {}
+    )
+
+    print("Assignee field from ticket:", assignee)
+
+    if isinstance(assignee, dict):
+        assigned_to = assignee.get("fullName") or assignee.get("name") or assignee.get("firstName")
+    elif isinstance(assignee, str):
+        assigned_to = assignee
+    else:
+        assigned_to = "Unassigned"
 
     slack_message = {
-        "text": f"🎟️ *New Ticket Received*\nID: `{ticket_id}`\nSubject: *{subject}*\nStatus: `{status}`\nAssigned To: {assigned_to}"
+        "text": f":admission_tickets: *New Ticket Received*\n"
+                f"ID: `{ticket_id}`\n"
+                f"Subject: *{subject}*\n"
+                f"Status: `{status}`\n"
+                f"Assigned To: {assigned_to}"
     }
 
     resp = requests.post(
@@ -165,3 +183,4 @@ def clean_tickets():
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=5000)
+
