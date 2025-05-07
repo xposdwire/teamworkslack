@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: teamworkslack
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn teamwork_to_slack.app:app
+    autoDeploy: true
+
