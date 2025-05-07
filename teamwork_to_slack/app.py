@@ -37,37 +37,10 @@ def fetch_bot_id():
 
 fetch_bot_id()
 
-@app.route("/", methods=["GET", "POST"])
-def index():
-    if request.method == "POST":
-        return jsonify({"message": "Teamwork tried to POST to root. Please use /teamwork-webhook"}), 405
-    return "✅ Teamwork-Slack webhook bridge is online."
-
-@app.route("/health", methods=["GET"])
-def health_check():
-    timestamp = datetime.utcnow().isoformat()
-    try:
-        test_message = {"text": f"✅ Health check at {timestamp}"}
-        resp = requests.post(
-            "https://slack.com/api/chat.postMessage",
-            headers={
-                "Authorization": f"Bearer {SLACK_BOT_TOKEN}",
-                "Content-Type": "application/json"
-            },
-            json={
-                "channel": latest_channel_id,
-                **test_message
-            }
-        )
-        if resp.status_code == 200:
-            return jsonify({"status": "ok", "timestamp": timestamp}), 200
-        else:
-            return jsonify({"status": "error", "details": resp.text, "timestamp": timestamp}), 500
-    except Exception as e:
-        return jsonify({"status": "error", "exception": str(e), "timestamp": timestamp}), 500
-
-@app.route("/teamwork-webhook", methods=["POST"])
+ @app.route("/teamwork-webhook", methods=["POST"])
 def teamwork_webhook():
+    from dateutil import tz
+
     timestamp = datetime.utcnow().isoformat()
     print(f"[Webhook {timestamp}] Received POST request")
     data = request.get_json()
@@ -79,12 +52,84 @@ def teamwork_webhook():
     ticket = data.get("ticket") or data.get("data", {}).get("ticket", {})
     ticket_id = ticket.get("id")
     subject = ticket.get("subject")
+    ticket_url = ticket.get("link")
 
     status = ticket.get("status")
     if isinstance(status, dict):
         status = status.get("name")
 
-    # Fix: Support "agent" field from Teamwork as assignee
+    priority = ticket.get("priority", {}).get("name", "Unknown")
+    ticket_type = ticket.get("type", {}).get("name", "General")
+
+    created_at = ticket.get("createdAt")
+    try:
+        # Convert to local time for better readability in Slack
+        created_dt = datetime.fromisoformat(created_at.replace("Z", "+00:00")).astimezone(tz.tzlocal())
+        created_ts = int(created_dt.timestamp())
+        slack_ts = f"<!date^{created_ts}^{{date_short_pretty}} at {{time}}|{created_dt.isoformat()}>"
+    except Exception:
+        slack_ts = created_at or "N/A"
+
+    assignee = (
+        ticket.get("agent") or
+        ticket.get("assignee") or
+        ticket.get("assigned_to") or
+        ticket.get("assigneeId") or
+        {}
+    )
+
+    if isinstance(assignee, dict):
+        assigned_name = assignee.get("fullName") or assignee.get("name") or assignee.get("firstName")
+        slack_mention = f"*🙋 Assigned To:*\n{assigned_name}"
+    elif isinstance(assignee, str):
+        slack_mention = f"*🙋 Assigned To:*\n{assignee}"
+    else:
+        slack_mention = "*🙋 Assigned To:*\nUnassigned"
+
+    payload = {
+        "channel": latest_channel_id,
+        "blocks": [
+            {"type": "section", "text": {"type": "mrkdwn", "text": ":admission_tickets: *New Ticket Received*"}},
+            {
+                "type": "section",
+                "fields": [
+                    {"type": "mrkdwn", "text": f"*🔗 Link:*\n<{ticket_url}|View Ticket>"},
+                    {"type": "mrkdwn", "text": f"*🆔 ID:*\n`{ticket_id}`"},
+                    {"type": "mrkdwn", "text": f"*📌 Subject:*\n*{subject}*"},
+                    {"type": "mrkdwn", "text": f"*📊 Status:*\n`{status}`"},
+                    {"type": "mrkdwn", "text": f"*🏷️ Type:*\n`{ticket_type}`"},
+                    {"type": "mrkdwn", "text": f"*🚨 Priority:*\n`{priority}`"},
+                    {"type": "mrkdwn", "text": slack_mention},
+                    {"type": "mrkdwn", "text": f"*🕒 Created:*\n{slack_ts}"}
+                ]
+            }
+        ]
+    }
+
+    resp = requests.post(
+        "https://slack.com/api/chat.postMessage",
+        headers={
+            "Authorization": f"Bearer {SLACK_BOT_TOKEN}",
+            "Content-Type": "application/json"
+        },
+        json=payload
+    )
+
+    print(f"[Slack {timestamp}] Response status:", resp.status_code)
+    print(f"[Slack {timestamp}] Response body:", resp.text)
+
+    if resp.status_code != 200:
+        return jsonify({"error": "Failed to send to Slack", "details": resp.text}), 500
+
+    return jsonify({"message": "Slack notification sent successfully.", "timestamp": timestamp}), 200
+
+
+
+
+# Fix: Support "agent" field from Teamwork as assignee
+
+
+
     assignee = (
         ticket.get("agent") or
         ticket.get("assignee") or
